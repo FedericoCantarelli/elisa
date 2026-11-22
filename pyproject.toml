@@ -1,0 +1,33 @@
+[project]
+name = "elisa"
+version = "0.1.0"
+description = "A simple CLI to manage expenses."
+readme = "README.md"
+authors = [
+    { name = "FedericoCantarelli", email = "fede.cantarelli98@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "python-telegram-bot==22.8",
+]
+
+[project.scripts]
+elisa = "elisa:main"
+el = "elisa:main"
+
+[dependency-groups]
+dev = [
+    "ruff==0.16",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_scheme = "semver2"
+version_provider = "pep621"
+update_changelog_on_bump = true
+major_version_zero = true
