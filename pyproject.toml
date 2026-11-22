@@ -7,9 +7,7 @@ authors = [
     { name = "FedericoCantarelli", email = "fede.cantarelli98@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = [
-    "python-telegram-bot==22.8",
-]
+dependencies = []
 
 [project.scripts]
 elisa = "elisa:main"
