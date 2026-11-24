@@ -56,7 +56,6 @@ Key invariants that span modules:
 
 - Ruff enforces Google-style docstrings (`D`), no `print` (`T20` — write to `sys.stdout`/`sys.stderr`), no relative imports, and one import per line (`force-single-line`) with two blank lines after imports. Output goes through the active formatter, not direct `sys.stdout.write` of plain text.
 - Do not commit.
-- Releases: `.github/workflows/release.yml` runs when a PR is merged into `main` (or by hand). It reads the version from `pyproject.toml`, skips if that GitHub release exists, runs ruff and the tests, `uv build`s, smoke-tests the wheel with `uvx`, and creates the release (tag = version, notes = that version's `CHANGELOG.md` section, wheel + sdist attached). It never bumps or pushes; versions come from `cz bump`.
 
 ## Context Rules
 - Do not read or search files inside `dist/`, `node_modules/`, or `logs/`

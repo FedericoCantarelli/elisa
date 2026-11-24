@@ -4,30 +4,10 @@
 
 ## Install
 
-Each release on GitHub has a wheel attached. Install it as a command-line tool
-with [uv](https://docs.astral.sh/uv/) (or `pipx install <url>`), replacing
-`0.3.0` with the version you want:
-
-```sh
-uv tool install https://github.com/FedericoCantarelli/elisa/releases/download/0.3.0/elisa-0.3.0-py3-none-any.whl
-el version
-```
-
-From a checkout, for development:
-
 ```sh
 uv sync            # or: uv tool install -e .
 uv run el          # or: uv run python -m elisa
 ```
-
-## Releases
-
-Merging a pull request into `main` publishes a GitHub release
-(`.github/workflows/release.yml`) for the version in `pyproject.toml`, so bump
-it with `cz bump` before merging. The release is tagged with the version, uses
-that version's `CHANGELOG.md` section as notes and has the wheel and sdist
-attached. If a release for that version already exists, the merge publishes
-nothing. The workflow can also be run by hand from the Actions tab.
 
 ## Usage
 
