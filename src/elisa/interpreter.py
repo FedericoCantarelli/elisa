@@ -39,6 +39,10 @@ HELP = [
     ["DELETE BUDGET <name>", "Soft delete a budget"],
     ["LIST ACCOUNT [ALL]", "List accounts, ALL includes deleted ones"],
     ["LIST BUDGET [ALL]", "List budgets, ALL includes deleted ones"],
+    [
+        "LIST TRANSACTION <account or budget>",
+        "List every transaction on an account or budget",
+    ],
     ["ADD <account> <amount> <description>", "Add money to an account"],
     ["SUB <account> <amount> <description>", "Take money from an account"],
     [
@@ -52,7 +56,7 @@ HELP = [
 ]
 
 MV_USAGE = "MV <source account> <dest account or budget> <amount> [description]"
-LIST_USAGE = "LIST ACCOUNT|BUDGET [ALL]"
+LIST_USAGE = "LIST ACCOUNT|BUDGET [ALL] | LIST TRANSACTION <account or budget>"
 
 
 def split_instructions(text: str) -> list[str]:
@@ -237,6 +241,11 @@ class Interpreter:
     def _cmd_list(self, args: list[str]) -> None:
         if not args or len(args) > 2:
             raise _usage(LIST_USAGE)
+        if args[0].upper() in ("TRANSACTION", "TRANSACTIONS"):
+            if len(args) != 2:
+                raise _usage(LIST_USAGE)
+            self._list_transactions(args[1])
+            return
         include_deleted = False
         if len(args) == 2:
             if args[1].upper() != "ALL":
@@ -313,6 +322,22 @@ class Interpreter:
         if include_deleted:
             header.insert(5, "STATUS")
         self._table(header, rows, right={1, 2, 3})
+
+    def _list_transactions(self, name: str) -> None:
+        """Print every transaction on `name`, deleted items included."""
+        if self.ledger.kind_of(name) is None:
+            raise ElError(f"no account or budget named {name!r}")
+        rows = [
+            [stamp, operation, amount or "", currency or "", description or ""]
+            for stamp, operation, amount, currency, description in (
+                self.journal.transactions(name)
+            )
+        ]
+        self._table(
+            ["TIMESTAMP", "OPERATION", "AMOUNT", "CURRENCY", "DESCRIPTION"],
+            rows,
+            right={2},
+        )
 
     def _table(
         self, header: list[str], rows: list[list[str]], right: set[int] = frozenset()

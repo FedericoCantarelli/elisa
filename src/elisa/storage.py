@@ -18,6 +18,9 @@ whole database can be rebuilt from the log at any time: `el` does it when
 the database is missing, and `el rebuild` does it on request. `meta` holds
 the size and SHA-256 of the log as it was after the last write, so `el` can
 tell when the log was changed outside of it.
+
+`Journal.transactions(name)` returns the history of one account or budget,
+including commits of a running transaction that are not saved yet.
 """
 
 import copy
@@ -111,6 +114,9 @@ LogState = tuple[int, str]
 Record = tuple[str, Operation]
 """A transaction: its UTC timestamp and the operation."""
 
+TransactionRow = tuple[str, str, str | None, str | None, str | None]
+"""A stored transaction: timestamp, operation, amount, currency, description."""
+
 
 class Database:
     """The SQLite file where el keeps its transactions and state."""
@@ -171,6 +177,20 @@ class Database:
         except sqlite3.Error as exc:
             raise self._error("cannot read", exc) from None
         return ledger
+
+    def transactions(self, target: str) -> list[TransactionRow]:
+        """Return every stored transaction on `target`, oldest first."""
+        try:
+            with closing(self._connect()) as conn:
+                return list(
+                    conn.execute(
+                        "SELECT timestamp, operation, amount, currency, description"
+                        " FROM transactions WHERE target = ? ORDER BY id",
+                        (target,),
+                    )
+                )
+        except sqlite3.Error as exc:
+            raise self._error("cannot read", exc) from None
 
     def save(
         self,
@@ -367,6 +387,20 @@ class Journal:
         except BaseException:
             self.ledger = saved
             raise
+
+    def transactions(self, target: str) -> list[TransactionRow]:
+        """Return every transaction on an account or budget, oldest first.
+
+        Inside a transaction this includes the commits not saved yet.
+        """
+        rows = self.db.transactions(target)
+        for stamp, op in self._pending or []:
+            _, verb, name, amount, currency, desc = _transaction_row(
+                self.ledger, stamp, op
+            )
+            if name == target:
+                rows.append((stamp, verb, amount, currency, desc))
+        return rows
 
     @contextmanager
     def transaction(self) -> Generator[None]:

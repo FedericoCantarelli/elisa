@@ -125,6 +125,30 @@ el> LIST BUDGET
 
 With nothing to show, it prints a table with only the header.
 
+### LIST TRANSACTION
+
+```
+LIST TRANSACTION <account or budget>
+```
+
+`TRANSACTIONS` also works. Shows every transaction on one account or budget,
+oldest first: its creation, each `ADD`/`SUB` (an `MV` appears as a `SUB` on the
+source and an `ADD` on the destination) and its deletion. Deleted accounts and
+budgets keep their history. `AMOUNT` is signed; on a budget an `ADD` is money
+spent. Times are UTC.
+
+```
+el> LIST TRANSACTION checking
++------------------+----------------+---------+----------+--------------------------------+
+| TIMESTAMP        | OPERATION      | AMOUNT  | CURRENCY | DESCRIPTION                    |
++------------------+----------------+---------+----------+--------------------------------+
+| 2026-11-24 06:20 | CREATE ACCOUNT |  100.00 | EUR      |                                |
+| 2026-11-24 06:20 | ADD            | 1500.00 | EUR      | salary november                |
+| 2026-11-24 06:20 | SUB            |  -12.50 | EUR      | coffee beans                   |
+| 2026-11-24 06:20 | SUB            | -200.00 | EUR      | MV checking -> savings account |
++------------------+----------------+---------+----------+--------------------------------+
+```
+
 ## Moving money
 
 `ADD` and `SUB` print the account's new balance; `MV` prints only the

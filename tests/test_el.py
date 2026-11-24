@@ -10,6 +10,7 @@ import unittest
 import unittest.mock
 from decimal import Decimal
 from pathlib import Path
+from typing import ClassVar
 
 from elisa import db_path
 from elisa import log_path
@@ -257,6 +258,96 @@ class TestCommands(ElTestCase):
     def test_exit_stops(self) -> None:
         """EXIT returns False so the caller stops."""
         self.assertFalse(self.interp.execute("EXIT"))
+
+
+class TestListTransactions(ElTestCase):
+    """LIST TRANSACTION <name> shows the history of one account or budget."""
+
+    HEADER: ClassVar = ["TIMESTAMP", "OPERATION", "AMOUNT", "CURRENCY", "DESCRIPTION"]
+
+    def history(self, name: str) -> list[list[str]]:
+        """Run LIST TRANSACTION and return its rows without timestamps."""
+        self.output.clear()
+        self.interp.execute(f"LIST TRANSACTION '{name}'")
+        header, *rows = cells(self.output[-1])
+        self.assertEqual(header, self.HEADER)
+        for row in rows:
+            self.assertRegex(row[0] + " ", STAMP)
+        return [row[1:] for row in rows]
+
+    def setUp(self) -> None:
+        """Create two accounts and a budget and move money between them."""
+        super().setUp()
+        self.run_all(
+            "CREATE ACCOUNT a 100 EUR",
+            "CREATE ACCOUNT b 0 EUR",
+            "CREATE BUDGET food 300 EUR groceries",
+            "ADD a 50 salary",
+            "MV a food 20 market",
+            "MV a b 10",
+        )
+
+    def test_account_history(self) -> None:
+        """An account shows its creation and every movement, oldest first."""
+        self.assertEqual(
+            self.history("a"),
+            [
+                ["CREATE ACCOUNT", "100.00", "EUR", ""],
+                ["ADD", "50.00", "EUR", "salary"],
+                ["SUB", "-20.00", "EUR", "market"],
+                ["SUB", "-10.00", "EUR", "MV a -> b"],
+            ],
+        )
+
+    def test_only_that_target(self) -> None:
+        """Transactions on other accounts and budgets are left out."""
+        self.assertEqual(
+            self.history("b"),
+            [
+                ["CREATE ACCOUNT", "0.00", "EUR", ""],
+                ["ADD", "10.00", "EUR", "MV a -> b"],
+            ],
+        )
+
+    def test_budget_history_includes_delete(self) -> None:
+        """A deleted budget still has its history, delete included."""
+        self.interp.execute("DELETE BUDGET food")
+        self.assertEqual(
+            self.history("food"),
+            [
+                ["CREATE BUDGET", "300.00", "EUR", "groceries"],
+                ["ADD", "20.00", "EUR", "market"],
+                ["DELETE BUDGET", "", "", ""],
+            ],
+        )
+
+    def test_plural_and_lower_case(self) -> None:
+        """TRANSACTIONS and lower-case keywords also work."""
+        self.output.clear()
+        self.interp.execute("list transactions b")
+        self.assertEqual(len(cells(self.output[-1])), 3)
+
+    def test_unknown_name(self) -> None:
+        """An unused name is an error."""
+        with self.assertRaises(ElError) as ctx:
+            self.interp.execute("LIST TRANSACTION nope")
+        self.assertIn("no account or budget named 'nope'", str(ctx.exception))
+
+    def test_name_is_required(self) -> None:
+        """LIST TRANSACTION needs exactly one name."""
+        for line in ("LIST TRANSACTION", "LIST TRANSACTION a b"):
+            with self.assertRaises(ElError):
+                self.interp.execute(line)
+
+    def test_sees_unsaved_batch_commits(self) -> None:
+        """Inside a -c batch it includes the commits not saved yet."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = self.run_cli("-c", "SUB b 4 snack; LIST TRANSACTION b")
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            cells(out.getvalue())[-1][1:], ["SUB", "-4.00", "EUR", "snack"]
+        )
 
 
 class TestCurrencies(ElTestCase):

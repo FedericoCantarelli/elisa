@@ -35,6 +35,7 @@ Keywords are case-insensitive. Quote names or descriptions that contain spaces
 | `CREATE BUDGET <name> <max budget> <currency> [description]` | New budget, with an optional description |
 | `DELETE ACCOUNT <name>` / `DELETE BUDGET <name>` | Soft delete |
 | `LIST ACCOUNT [ALL]` / `LIST BUDGET [ALL]` | List, `ALL` includes deleted ones |
+| `LIST TRANSACTION <account or budget>` | Every transaction on that account or budget, deleted ones included |
 | `ADD <account> <amount> <description>` | Add money to an account |
 | `SUB <account> <amount> <description>` | Take money from an account |
 | `MV <source> <dest account> <amount> [description]` | Transfer between accounts |
