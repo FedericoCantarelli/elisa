@@ -1,0 +1,81 @@
+# Publish a GitHub release when a pull request is merged into main.
+#
+# The version comes from pyproject.toml (bumped with `cz bump`). If a release
+# for that version already exists, nothing happens, so merges without a bump
+# are skipped. Otherwise the checks run, the wheel and sdist are built and
+# smoke-tested, and a release tagged with the version is created on the merge
+# commit, with the CHANGELOG section as notes and both files attached.
+
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch: # release the current main by hand, e.g. after a failed run
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET }}
+
+      - name: Read version
+        id: version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "Release $version already exists, nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: astral-sh/setup-uv@v6
+        if: steps.version.outputs.exists != 'true'
+
+      - name: Check
+        if: steps.version.outputs.exists != 'true'
+        run: |
+          uv run --frozen ruff check .
+          uv run --frozen ruff format --check .
+          uv run --frozen python -m unittest discover -s tests
+
+      - name: Build
+        if: steps.version.outputs.exists != 'true'
+        run: |
+          uv build
+          ls dist
+          test -f "dist/elisa-${{ steps.version.outputs.version }}-py3-none-any.whl"
+
+      - name: Smoke-test the wheel
+        if: steps.version.outputs.exists != 'true'
+        run: uvx --from "dist/elisa-${{ steps.version.outputs.version }}-py3-none-any.whl" el --json version
+
+      - name: Create release
+        if: steps.version.outputs.exists != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # notes: this version's section of CHANGELOG.md, without its heading
+          awk -v v="$VERSION" '
+            $0 ~ "^## " { if (found) exit; if (index($0, "## " v " ") == 1 || $0 == "## " v) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Release $VERSION" > notes.md
+          gh release create "$VERSION" dist/* \
+            --target "$TARGET" \
+            --title "$VERSION" \
+            --notes-file notes.md
