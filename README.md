@@ -17,6 +17,7 @@ el -c "LIST ACCOUNT; LIST BUDGET;"   # semicolon-separated instructions
 el -f script.el                      # one instruction per line
 el --log path/to/ledger.log ...      # use another ledger log
 el --db path/to/data.db ...          # use another database
+el --json -c "LIST ACCOUNT;"         # JSON output instead of tables
 el version                           # version from pyproject.toml
 el rebuild                           # rebuild the database from the ledger log
 ```
@@ -54,6 +55,14 @@ el> LIST ACCOUNT
 +----------+---------+----------+
 | checking | 1600.00 | EUR      |
 +----------+---------+----------+
+```
+
+With `--json` each result is one line of JSON instead, an array with an object
+per row; errors and warnings are `{"error": ...}` / `{"warning": ...}` on stderr:
+
+```sh
+$ el --json -c "LIST ACCOUNT"
+[{"account": "checking", "balance": "1600.00", "currency": "EUR"}]
 ```
 
 The supported currencies are `EUR` and `KWD`. An account only works with

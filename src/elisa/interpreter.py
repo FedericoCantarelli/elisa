@@ -25,6 +25,7 @@ from elisa.ledger import Operation
 from elisa.ledger import parse_amount
 from elisa.ledger import parse_currency
 from elisa.storage import Journal
+from elisa.table import Formatter
 from elisa.table import format_table
 
 
@@ -112,11 +113,15 @@ class Interpreter:
     """Runs el instructions against a journal."""
 
     def __init__(
-        self, journal: Journal, out: Callable[[str], None] = write_stdout
+        self,
+        journal: Journal,
+        out: Callable[[str], None] = write_stdout,
+        fmt: Formatter = format_table,
     ) -> None:
-        """Create an interpreter that writes its output through `out`."""
+        """Create an interpreter that formats with `fmt` and writes through `out`."""
         self.journal = journal
         self.out = out
+        self.fmt = fmt
 
     @property
     def ledger(self) -> Ledger:
@@ -342,5 +347,5 @@ class Interpreter:
     def _table(
         self, header: list[str], rows: list[list[str]], right: set[int] = frozenset()
     ) -> None:
-        """Write one table through `out`; every interpreter output goes here."""
-        self.out(format_table(header, rows, align_right=right))
+        """Format one table with `fmt` and write it; all output goes here."""
+        self.out(self.fmt(header, rows, align_right=right))

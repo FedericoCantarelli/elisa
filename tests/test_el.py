@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 import re
 import sqlite3
@@ -19,6 +20,7 @@ from elisa.interpreter import Interpreter
 from elisa.interpreter import split_instructions
 from elisa.ledger import ElError
 from elisa.storage import Journal
+from elisa.table import format_json
 from elisa.table import format_table
 from elisa.version import PYPROJECT
 from elisa.version import get_version
@@ -788,6 +790,85 @@ class TestVersion(unittest.TestCase):
         )
 
 
+class TestJson(ElTestCase):
+    """--json prints every result as one line of JSON."""
+
+    def run_json(self, *args: str) -> tuple[int, list, list]:
+        """Run el --json; return the exit code and parsed stdout/stderr lines."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = self.run_cli("--json", *args)
+        parse = [json.loads(line) for line in out.getvalue().splitlines()]
+        errors = [json.loads(line) for line in err.getvalue().splitlines()]
+        return code, parse, errors
+
+    def test_one_line_per_result(self) -> None:
+        """Each instruction's output is one JSON array of row objects."""
+        code, out, err = self.run_json("-c", "LIST ACCOUNT; CREATE ACCOUNT a 10 EUR")
+        self.assertEqual((code, err), (0, []))
+        self.assertEqual(
+            out, [[], [{"account": "a", "balance": "10.00", "currency": "EUR"}]]
+        )
+
+    def test_budget_and_transactions(self) -> None:
+        """Keys are the lowercased column names and amounts stay strings."""
+        _, out, _ = self.run_json(
+            "-c",
+            "CREATE ACCOUNT a 10 EUR; CREATE BUDGET food 5 EUR; MV a food 2;"
+            " LIST TRANSACTION food",
+        )
+        self.assertEqual(
+            out[2],
+            [
+                {
+                    "budget": "food",
+                    "max": "5.00",
+                    "spent": "2.00",
+                    "remaining": "3.00",
+                    "currency": "EUR",
+                }
+            ],
+        )
+        self.assertEqual(
+            [(t["operation"], t["amount"]) for t in out[3]],
+            [("CREATE BUDGET", "5.00"), ("ADD", "2.00")],
+        )
+
+    def test_error_is_json_on_stderr(self) -> None:
+        """An error is an {"error": ...} object on stderr and exits 1."""
+        code, out, err = self.run_json("-c", "SUB nope 1 x")
+        self.assertEqual((code, out), (1, []))
+        self.assertEqual(
+            err,
+            [{"error": "instruction 1: no account named 'nope'\nnothing was saved"}],
+        )
+
+    def test_warning_is_json_on_stderr(self) -> None:
+        """The log-changed warning is a {"warning": ...} object."""
+        self.interp.execute("CREATE ACCOUNT a 1 EUR")
+        with self.log.open("a") as fh:
+            fh.write("# a comment\n")
+        _, _, err = self.run_json("-c", "LIST ACCOUNT")
+        self.assertIn("el rebuild", err[0]["warning"])
+
+    def test_version(self) -> None:
+        """`el --json version` prints the version as JSON."""
+        _, out, _ = self.run_json("version")
+        self.assertEqual(out, [[{"program": "el", "version": get_version()}]])
+
+    def test_interpreter_formatter(self) -> None:
+        """The interpreter uses the formatter it is given."""
+        lines: list[str] = []
+        interp = Interpreter(
+            Journal(self.log, self.db), out=lines.append, fmt=format_json
+        )
+        interp.execute("CREATE ACCOUNT a 1 EUR")
+        self.assertEqual(
+            json.loads(lines[0]),
+            [{"account": "a", "balance": "1.00", "currency": "EUR"}],
+        )
+
+
 class TestTable(unittest.TestCase):
     """The ASCII table formatter behind all output."""
 
@@ -826,6 +907,16 @@ class TestTable(unittest.TestCase):
         """A row with the wrong number of cells is a bug, not a user error."""
         with self.assertRaises(ValueError):
             format_table(["A", "B"], [["only one"]])
+
+    def test_json(self) -> None:
+        """format_json gives an array of objects keyed by lowercased columns."""
+        self.assertEqual(
+            format_json(["NAME", "N"], [["é", "1.00"]], align_right={1}),
+            '[{"name": "é", "n": "1.00"}]',
+        )
+        self.assertEqual(format_json(["A"], []), "[]")
+        with self.assertRaises(ValueError):
+            format_json(["A", "B"], [["only one"]])
 
 
 if __name__ == "__main__":

@@ -28,6 +28,28 @@ Everything `el` prints is an ASCII table with a header row, including `HELP`,
 errors and warnings. Each command picks its own columns; amount columns are
 right-aligned. A table with no rows still shows its header.
 
+### JSON
+
+`el --json` (with `-c`, `-f`, the interpreter, `version` or `rebuild`) prints
+the same results as JSON. Each table becomes one line: an array with an object
+per row, keyed by the lowercased column names. Values are strings, so amounts
+keep their exact two decimals, and an empty list is `[]`. An instruction that
+printed two tables prints two lines.
+
+```
+$ el --json -c "LIST BUDGET; MV checking groceries 10"
+[{"budget": "groceries", "max": "300.00", "spent": "54.20", "remaining": "245.80", "currency": "EUR", "description": "food and markets"}]
+[{"budget": "groceries", "max": "300.00", "spent": "64.20", "remaining": "235.80", "currency": "EUR"}]
+```
+
+Errors and warnings go to stderr as a single object, with the lines of the
+message joined by `\n`:
+
+```
+$ el --json -c "SUB checking 1.234 x"
+{"error": "instruction 1: invalid amount: '1.234' has more than two decimals\nnothing was saved"}
+```
+
 ## Accounts and budgets
 
 ### CREATE ACCOUNT
