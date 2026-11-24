@@ -168,13 +168,13 @@ def parse_amount(text: str, what: str = "amount") -> Decimal:
     """
     try:
         value = Decimal(text)
-    except ArithmeticError:
+        if not value.is_finite():
+            raise ElError(f"invalid {what}: {text!r}")
+        if value != value.quantize(CENT):
+            raise ElError(f"invalid {what}: {text!r} has more than two decimals")
+        return value.quantize(CENT)
+    except ArithmeticError:  # quantize overflows on huge exponents, e.g. 1e40
         raise ElError(f"invalid {what}: {text!r}") from None
-    if not value.is_finite():
-        raise ElError(f"invalid {what}: {text!r}")
-    if value != value.quantize(CENT):
-        raise ElError(f"invalid {what}: {text!r} has more than two decimals")
-    return value.quantize(CENT)
 
 
 def parse_currency(text: str) -> str:

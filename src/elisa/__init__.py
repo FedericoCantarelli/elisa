@@ -8,17 +8,28 @@
 
 The SQLite database defaults to ~/.elisa/data.db (change it with --db) and the
 ledger log to ~/.elisa/ledger.log (change it with --log).
+
+Everything el writes, including errors and warnings on stderr, is an ASCII
+table made by `elisa.table.format_table`. With --json it is JSON instead: one
+line per table, an array of row objects (see `elisa.table.format_json`), and
+errors and warnings become {"error": ...} and {"warning": ...} objects.
 """
 
 import argparse
 import contextlib
+import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import TextIO
 
 from elisa.interpreter import Interpreter
 from elisa.interpreter import split_instructions
 from elisa.ledger import ElError
 from elisa.storage import Journal
+from elisa.table import Formatter
+from elisa.table import format_json
+from elisa.table import format_table
 from elisa.version import get_version
 
 
@@ -40,8 +51,33 @@ def db_path(cli_value: str | None) -> Path:
     return DEFAULT_DB
 
 
-def _err(text: str) -> None:
-    sys.stderr.write(f"error: {text}\n")
+def _write_table(
+    fmt: Formatter,
+    header: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    stream: TextIO | None = None,
+) -> None:
+    """Write a table, formatted with `fmt`, to `stream` (stdout by default)."""
+    (stream or sys.stdout).write(fmt(header, rows) + "\n")
+
+
+def _notice(fmt: Formatter, kind: str, *lines: str) -> None:
+    """Write an error or warning to stderr.
+
+    As a table it has one column named after `kind` and a row per line of the
+    message; as JSON it is one object, {kind: message}.
+    """
+    lines = tuple(line for text in lines for line in text.split("\n"))
+    if fmt is format_json:
+        sys.stderr.write(json.dumps({kind: "\n".join(lines)}, ensure_ascii=False))
+        sys.stderr.write("\n")
+    else:
+        _write_table(fmt, [kind.upper()], [[line] for line in lines], sys.stderr)
+
+
+def _err(fmt: Formatter, *lines: str) -> None:
+    """Write an error to stderr, see `_notice`."""
+    _notice(fmt, "error", *lines)
 
 
 def run_batch(interp: Interpreter, instructions: list[tuple[str, str]]) -> int:
@@ -65,7 +101,7 @@ def run_batch(interp: Interpreter, instructions: list[tuple[str, str]]) -> int:
                 except ElError as exc:
                     raise ElError(f"{where}: {exc}") from None
     except ElError as exc:
-        _err(f"{exc}\nnothing was saved")
+        _err(interp.fmt, str(exc), "nothing was saved")
         return 1
     return 0
 
@@ -74,9 +110,14 @@ def repl(interp: Interpreter, args: argparse.Namespace) -> int:
     """Run the interactive interpreter until EXIT or end of input."""
     with contextlib.suppress(ImportError):
         import readline  # noqa: F401  (line editing and history)
-    sys.stdout.write(f"Ledger log: {log_path(args.log)}\n")
-    sys.stdout.write(f"Database:   {db_path(args.db)}\n")
-    sys.stdout.write("Type HELP for commands, EXIT or Ctrl-D to quit.\n")
+    _write_table(
+        interp.fmt,
+        ["SETTING", "VALUE"],
+        [
+            ["Ledger log", str(log_path(args.log))],
+            ["Database", str(db_path(args.db))],
+        ],
+    )
     while True:
         try:
             line = input("el> ")
@@ -90,7 +131,7 @@ def repl(interp: Interpreter, args: argparse.Namespace) -> int:
             if not interp.execute(line):
                 return 0
         except ElError as exc:
-            _err(str(exc))
+            _err(interp.fmt, str(exc))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -116,6 +157,11 @@ def main(argv: list[str] | None = None) -> int:
         help=f"SQLite database with all transactions (default: {DEFAULT_DB})",
     )
     parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print output as JSON, one line per result, instead of tables",
+    )
+    parser.add_argument(
         "command",
         nargs="?",
         choices=["version", "rebuild"],
@@ -123,25 +169,38 @@ def main(argv: list[str] | None = None) -> int:
         "rebuild: rebuild the database from the ledger log",
     )
     args = parser.parse_args(argv)
+    fmt = format_json if args.json else format_table
 
     if args.command and (args.c is not None or args.f is not None):
         parser.error(f"{args.command} cannot be combined with -c or -f")
     if args.command == "version":
-        sys.stdout.write(f"el {get_version()}\n")
+        _write_table(fmt, ["PROGRAM", "VERSION"], [["el", get_version()]])
         return 0
 
     try:
         journal = Journal(log_path(args.log), db_path(args.db))
         if args.command == "rebuild":
             journal.rebuild()
-            sys.stdout.write(f"rebuilt {journal.db.path} from {journal.path}\n")
-            return 0
-        if journal.log_changed:
-            sys.stderr.write(
-                f"warning: {journal.path} changed since el last wrote it;"
-                " run `el rebuild` to update the database from it\n"
+            _write_table(
+                fmt, ["REBUILT", "FROM"], [[str(journal.db.path), str(journal.path)]]
             )
-        interp = Interpreter(journal)
+            return 0
+        if journal.recovered:
+            _notice(
+                fmt,
+                "warning",
+                f"an interrupted write was removed from the end of {journal.path}",
+                f"it was saved to {journal.recovered}",
+            )
+        if journal.log_changed:
+            _notice(
+                fmt,
+                "warning",
+                f"{journal.path} changed since el last wrote it",
+                "run `el rebuild` to update the database from it;"
+                " until then el refuses to make changes",
+            )
+        interp = Interpreter(journal, fmt=fmt)
         if args.c is not None:
             parts = split_instructions(args.c)
             numbered = [(f"instruction {i}", p) for i, p in enumerate(parts, 1)]
@@ -156,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
             return run_batch(interp, lines)
         return repl(interp, args)
     except ElError as exc:
-        _err(str(exc))
+        _err(fmt, str(exc))
         return 1
 
 

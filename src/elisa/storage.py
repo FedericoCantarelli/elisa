@@ -17,16 +17,28 @@ atomic actions. Every transaction is written to both, in one unit, so the
 whole database can be rebuilt from the log at any time: `el` does it when
 the database is missing, and `el rebuild` does it on request. `meta` holds
 the size and SHA-256 of the log as it was after the last write, so `el` can
-tell when the log was changed outside of it.
+tell when the log was changed outside of it; until it is rebuilt, `el` refuses
+to write.
+
+Writes happen under the SQLite write lock (`Database.write_lock`), which also
+serialises appends to the log. Inside it `Journal` reloads the state from the
+database, applies the operations, writes the rows, appends and fsyncs the log
+lines, and then commits. A failed commit cuts the lines from the log again.
+A write cut short by a crash leaves bytes after the committed log size that
+don't end with a newline; they are moved to `<log>.interrupted`.
+
+`Journal.transactions(name)` returns the history of one account or budget,
+including commits of a running transaction that are not saved yet.
 """
 
 import copy
 import hashlib
+import os
 import sqlite3
-from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import closing
 from contextlib import contextmanager
+from contextlib import suppress
 from decimal import Decimal
 from pathlib import Path
 
@@ -111,6 +123,9 @@ LogState = tuple[int, str]
 Record = tuple[str, Operation]
 """A transaction: its UTC timestamp and the operation."""
 
+TransactionRow = tuple[str, str, str | None, str | None, str | None]
+"""A stored transaction: timestamp, operation, amount, currency, description."""
+
 
 class Database:
     """The SQLite file where el keeps its transactions and state."""
@@ -133,30 +148,39 @@ class Database:
     def _error(self, action: str, exc: Exception) -> ElError:
         return ElError(f"{action} database {self.path}: {exc}")
 
-    def log_state(self) -> LogState | None:
+    @contextmanager
+    def _reader(self, conn: sqlite3.Connection | None) -> Generator[sqlite3.Connection]:
+        """Use `conn` if given, else a connection of our own."""
+        if conn is not None:
+            yield conn
+            return
+        with closing(self._connect()) as own:
+            yield own
+
+    def log_state(self, conn: sqlite3.Connection | None = None) -> LogState | None:
         """Return the log size and digest after the last write, if any."""
         try:
-            with closing(self._connect()) as conn:
-                rows = dict(conn.execute("SELECT key, value FROM meta"))
+            with self._reader(conn) as c:
+                rows = dict(c.execute("SELECT key, value FROM meta"))
         except sqlite3.Error as exc:
             raise self._error("cannot read", exc) from None
         if "log_size" not in rows or "log_sha256" not in rows:
             return None
         return int(rows["log_size"]), rows["log_sha256"]
 
-    def load(self) -> Ledger:
+    def load(self, conn: sqlite3.Connection | None = None) -> Ledger:
         """Return the current state stored in the database."""
         ledger = Ledger()
         try:
-            with closing(self._connect()) as conn:
-                for name, currency, balance, deleted in conn.execute(
+            with self._reader(conn) as c:
+                for name, currency, balance, deleted in c.execute(
                     "SELECT name, currency, balance, deleted FROM accounts"
                     " ORDER BY position"
                 ):
                     ledger.accounts[name] = Account(
                         name, currency, Decimal(balance), bool(deleted)
                     )
-                for name, currency, max_amount, spent, deleted, desc in conn.execute(
+                for name, currency, max_amount, spent, deleted, desc in c.execute(
                     "SELECT name, currency, max_amount, spent, deleted, description"
                     " FROM budgets ORDER BY position"
                 ):
@@ -172,31 +196,26 @@ class Database:
             raise self._error("cannot read", exc) from None
         return ledger
 
-    def save(
-        self,
-        ledger: Ledger,
-        records: list[Record],
-        write_log: Callable[[], LogState],
-        rebuild: bool = False,
-    ) -> None:
-        """Store new transactions and the new state, and append to the log.
+    def transactions(self, target: str) -> list[TransactionRow]:
+        """Return every stored transaction on `target`, oldest first."""
+        try:
+            with closing(self._connect()) as conn:
+                return list(
+                    conn.execute(
+                        "SELECT timestamp, operation, amount, currency, description"
+                        " FROM transactions WHERE target = ? ORDER BY id",
+                        (target,),
+                    )
+                )
+        except sqlite3.Error as exc:
+            raise self._error("cannot read", exc) from None
 
-        The rows are written inside a database transaction, then
-        `write_log` appends to the log, then the transaction is committed.
-        If anything before the commit fails, the database is rolled back and
-        the error is raised, so neither file changes. If only the commit
-        fails, the log holds the change and the database does not; `el`
-        notices the mismatch on the next start and `el rebuild` fixes it.
+    @contextmanager
+    def write_lock(self) -> Generator[sqlite3.Connection]:
+        """Hold the database write lock for the duration of the block.
 
-        Args:
-            ledger: The state after the new transactions.
-            records: The new transactions, in order.
-            write_log: Appends the matching lines to the log and returns the
-                new log state. When rebuilding, it only reads the state.
-            rebuild: Remove every row first, used when replaying the log.
-
-        Raises:
-            ElError: If the database or the log cannot be written.
+        Another el process that wants to write waits until the block ends.
+        Unless the block committed, everything it wrote is rolled back.
         """
         try:
             conn = self._connect()
@@ -204,37 +223,54 @@ class Database:
             raise self._error("cannot open", exc) from None
         with closing(conn):
             try:
-                # take the write lock now, so that another el waits for us
                 conn.execute("BEGIN IMMEDIATE")
-                if rebuild:
-                    for table in ("transactions", "accounts", "budgets", "meta"):
-                        conn.execute(f"DELETE FROM {table}")
-                    conn.execute("DELETE FROM sqlite_sequence")
-                conn.executemany(
-                    INSERT_TRANSACTION,
-                    [_transaction_row(ledger, stamp, op) for stamp, op in records],
-                )
-                conn.executemany(UPSERT_ACCOUNT, _account_rows(ledger))
-                conn.executemany(UPSERT_BUDGET, _budget_rows(ledger))
             except sqlite3.Error as exc:
-                conn.rollback()
-                raise self._error("cannot write", exc) from None
+                raise self._error("cannot lock", exc) from None
             try:
-                size, digest = write_log()
-            except BaseException:
-                conn.rollback()
-                raise
-            try:
-                conn.executemany(
-                    UPSERT_META, [("log_size", str(size)), ("log_sha256", digest)]
-                )
-                conn.commit()
-            except sqlite3.Error as exc:
-                conn.rollback()
-                raise ElError(
-                    f"saved to the log but not to database {self.path}: {exc}"
-                    " (run `el rebuild` to fix it)"
-                ) from None
+                yield conn
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
+
+    def store(
+        self,
+        conn: sqlite3.Connection,
+        ledger: Ledger,
+        records: list[Record],
+        rebuild: bool = False,
+    ) -> None:
+        """Write new transactions and the new state, without committing.
+
+        Args:
+            conn: A connection holding the write lock.
+            ledger: The state after the new transactions.
+            records: The new transactions, in order.
+            rebuild: Remove every row first, used when replaying the log.
+
+        Raises:
+            ElError: If the rows cannot be written.
+        """
+        try:
+            if rebuild:
+                for table in ("transactions", "accounts", "budgets", "meta"):
+                    conn.execute(f"DELETE FROM {table}")
+                conn.execute("DELETE FROM sqlite_sequence")
+            conn.executemany(
+                INSERT_TRANSACTION,
+                [_transaction_row(ledger, stamp, op) for stamp, op in records],
+            )
+            conn.executemany(UPSERT_ACCOUNT, _account_rows(ledger))
+            conn.executemany(UPSERT_BUDGET, _budget_rows(ledger))
+        except sqlite3.Error as exc:
+            raise self._error("cannot write", exc) from None
+
+    @staticmethod
+    def commit(conn: sqlite3.Connection, state: LogState) -> None:
+        """Record the new log state and commit; sqlite3.Error is left to the caller."""
+        conn.executemany(
+            UPSERT_META, [("log_size", str(state[0])), ("log_sha256", state[1])]
+        )
+        conn.commit()
 
 
 def _transaction_row(
@@ -288,45 +324,66 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         )
 
 
-def read_log_state(path: Path) -> LogState:
-    """Return the size and SHA-256 of the log, (0, digest of b"") if missing."""
+def _read_bytes(path: Path) -> bytes:
+    """Return the contents of the log, b"" if it doesn't exist."""
     try:
-        data = path.read_bytes()
+        return path.read_bytes()
     except FileNotFoundError:
-        data = b""
+        return b""
     except OSError as exc:
         raise ElError(f"cannot read {path}: {exc.strerror}") from None
+
+
+def _state_of(data: bytes) -> LogState:
     return len(data), hashlib.sha256(data).hexdigest()
 
 
+def read_log_state(path: Path) -> LogState:
+    """Return the size and SHA-256 of the log, (0, digest of b"") if missing."""
+    return _state_of(_read_bytes(path))
+
+
 class Journal:
-    """A ledger stored in the SQLite database and mirrored in the ledger log."""
+    """A ledger stored in the SQLite database and mirrored in the ledger log.
+
+    Every write happens under the database write lock: the state is reloaded
+    from the database, the operations are applied to it, the rows are
+    written, the log lines are appended and synced, and only then the
+    database is committed. So two el processes never work from stale state,
+    and the log and the database change together.
+    """
 
     def __init__(self, path: Path, db_path: Path) -> None:
         """Load the state from the database.
 
         A new or empty database is first built from the log, if there is one.
-        `log_changed` is set when the log no longer matches what the database
-        last wrote, for example because it was edited by hand.
+        An interrupted write at the end of the log is moved aside (see
+        `recovered`). `log_changed` is set when the log no longer matches what
+        the database last wrote, for example because it was edited by hand.
         """
         self.path = path
         self.db = Database(db_path)
         self._pending: list[Record] | None = None
+        # where an interrupted write at the end of the log was moved to
+        self.recovered: Path | None = None
         stored = self.db.log_state()
         if stored is None:
             self.rebuild()
-            self.log_changed = False
         else:
+            if stored != read_log_state(self.path):
+                with self.db.write_lock() as conn:
+                    self._recover(self.db.log_state(conn))
             self.ledger = self.db.load()
-            self.log_changed = stored != read_log_state(self.path)
+            self.log_changed = self.db.log_state() != read_log_state(self.path)
+
+    def refresh(self) -> None:
+        """Reload the state from the database, unless inside a transaction."""
+        if self._pending is None:
+            self.ledger = self.db.load()
 
     def rebuild(self) -> None:
         """Replace everything in the database with a replay of the log."""
-        ledger, records = self._replay()
-        state = read_log_state(self.path)
-        self.db.save(ledger, records, lambda: state, rebuild=True)
-        self.ledger = ledger
-        self.log_changed = False
+        self._write([], rebuild=True)
 
     def _replay(self) -> tuple[Ledger, list[Record]]:
         ledger = Ledger()
@@ -338,6 +395,12 @@ class Journal:
                 line = raw.strip()
                 if not line or line.startswith("#"):
                     continue
+                if not raw.endswith("\n"):
+                    raise ElError(
+                        f"{self.path}:{number}: the last line is incomplete (no"
+                        " newline at the end); finish or remove it, then run"
+                        " `el rebuild`"
+                    )
                 try:
                     stamp, op = parse_log_line(line)
                     ledger.apply(op)
@@ -345,6 +408,35 @@ class Journal:
                     raise ElError(f"{self.path}:{number}: {exc}") from None
                 records.append((stamp, op))
         return ledger, records
+
+    def _recover(self, stored: LogState | None) -> None:
+        """Move an interrupted write at the end of the log aside.
+
+        el writes whole lines and commits the database only after the log
+        write finished, so bytes after the last committed size that don't end
+        with a newline are a write that was cut short (a crash or power loss
+        during the append). The database never saw them. They are appended
+        to `<log>.interrupted` and cut from the log. Call with the write lock
+        held, so that no other el is appending at the same time.
+        """
+        if stored is None:
+            return
+        size = stored[0]
+        data = _read_bytes(self.path)
+        if len(data) <= size or data.endswith(b"\n"):
+            return
+        if _state_of(data[:size]) != stored:
+            return  # changed by hand before the committed size: not ours
+        aside = self.path.with_name(self.path.name + ".interrupted")
+        try:
+            with aside.open("ab") as fh:
+                fh.write(data[size:])
+                fh.flush()
+                os.fsync(fh.fileno())
+            self._truncate(size)
+        except OSError as exc:
+            raise ElError(f"cannot repair {self.path}: {exc.strerror}") from None
+        self.recovered = aside
 
     def commit(self, ops: list[Operation]) -> None:
         """Check all operations, then apply them and save them.
@@ -354,19 +446,27 @@ class Journal:
         transaction nothing is saved until the transaction ends.
         """
         self.ledger.check(ops)
-        stamp = now_utc()
-        records = [(stamp, op) for op in ops]
-        saved = copy.deepcopy(self.ledger)
-        for op in ops:
-            self.ledger.apply(op)
+        records = [(now_utc(), op) for op in ops]
         if self._pending is not None:
+            for op in ops:
+                self.ledger.apply(op)
             self._pending.extend(records)
             return
-        try:
-            self._save(records)
-        except BaseException:
-            self.ledger = saved
-            raise
+        self._write(records)
+
+    def transactions(self, target: str) -> list[TransactionRow]:
+        """Return every transaction on an account or budget, oldest first.
+
+        Inside a transaction this includes the commits not saved yet.
+        """
+        rows = self.db.transactions(target)
+        for stamp, op in self._pending or []:
+            _, verb, name, amount, currency, desc = _transaction_row(
+                self.ledger, stamp, op
+            )
+            if name == target:
+                rows.append((stamp, verb, amount, currency, desc))
+        return rows
 
     @contextmanager
     def transaction(self) -> Generator[None]:
@@ -375,27 +475,95 @@ class Journal:
         If the block raises, or saving fails, the in-memory state is
         restored and neither the database nor the log changes.
         """
+        self.refresh()
         saved = copy.deepcopy(self.ledger)
         self._pending = []
         try:
             yield
-            self._save(self._pending)
+            records, self._pending = self._pending, None
+            self._write(records)
         except BaseException:
             self.ledger = saved
             raise
         finally:
             self._pending = None
 
-    def _save(self, records: list[Record]) -> None:
-        if records:
-            lines = [f"{stamp} {op.to_line()}\n" for stamp, op in records]
-            self.db.save(self.ledger, records, lambda: self._append(lines))
+    def _write(self, records: list[Record], rebuild: bool = False) -> None:
+        """Save records (or replay the log) under the database write lock.
 
-    def _append(self, lines: list[str]) -> LogState:
+        The operations are re-applied to the state read from the database
+        inside the lock, not to `self.ledger`, which may be stale if another
+        el wrote in the meantime. If any step before the commit fails, the
+        database is rolled back and the log is left as it was. If the commit
+        itself fails, the appended lines are cut from the log again.
+
+        Raises:
+            ElError: If an operation no longer applies, the log changed since
+                el last wrote it, or either file cannot be written.
+        """
+        if not records and not rebuild:
+            return
+        with self.db.write_lock() as conn:
+            stored = self.db.log_state(conn)
+            self._recover(stored)
+            if rebuild:
+                ledger, records = self._replay()
+                self.db.store(conn, ledger, records, rebuild=True)
+                state = read_log_state(self.path)
+                size = None
+            else:
+                size, _ = state = read_log_state(self.path)
+                if stored != state:
+                    raise ElError(
+                        f"{self.path} changed since el last wrote it; run"
+                        " `el rebuild` before making changes"
+                    )
+                ledger = self.db.load(conn)
+                for _, op in records:
+                    ledger.apply(op)
+                self.db.store(conn, ledger, records)
+                lines = [f"{stamp} {op.to_line()}\n" for stamp, op in records]
+                state = self._append(lines, size)
+            try:
+                self.db.commit(conn, state)
+            except sqlite3.Error as exc:
+                self._undo_append(size, exc)
+        self.ledger = ledger
+        self.log_changed = False
+
+    def _undo_append(self, size: int | None, exc: sqlite3.Error) -> None:
+        """After a failed commit, cut the log back to `size` and raise."""
+        try:
+            if size is not None:
+                self._truncate(size)
+        except OSError:
+            raise ElError(
+                f"saved to the log but not to database {self.db.path}: {exc}"
+                " (run `el rebuild` to fix it)"
+            ) from None
+        raise self.db._error("cannot write", exc) from None
+
+    def _append(self, lines: list[str], size: int) -> LogState:
+        """Append lines to the log, which is `size` bytes long, and sync them.
+
+        If writing or syncing fails, whatever part of the lines reached the
+        file is cut off again, so the log stays as the database knows it.
+        """
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write("".join(lines))
+                fh.flush()
+                os.fsync(fh.fileno())
         except OSError as exc:
+            with suppress(OSError):
+                self._truncate(size)
             raise ElError(f"cannot write {self.path}: {exc.strerror}") from None
         return read_log_state(self.path)
+
+    def _truncate(self, size: int) -> None:
+        """Cut the log back to `size` bytes and sync it."""
+        with self.path.open("r+b") as fh:
+            fh.truncate(size)
+            fh.flush()
+            os.fsync(fh.fileno())

@@ -25,25 +25,39 @@ from elisa.ledger import Operation
 from elisa.ledger import parse_amount
 from elisa.ledger import parse_currency
 from elisa.storage import Journal
+from elisa.table import Formatter
+from elisa.table import format_table
 
 
-HELP = """\
-Commands (keywords are case-insensitive, quote names with spaces).
-Currencies: EUR, KWD. MV only works between items of the same currency.
-  CREATE ACCOUNT <name> <starting balance> <currency>
-  CREATE BUDGET <name> <max budget> <currency> [description]
-  DELETE ACCOUNT <name>
-  DELETE BUDGET <name>
-  LIST ACCOUNT [ALL]
-  LIST BUDGET [ALL]
-  ADD <account> <amount> <description>
-  SUB <account> <amount> <description>
-  MV <source account> <dest account or budget> <amount> [description]
-  HELP
-  EXIT"""
+HELP_HEADER = ["COMMAND", "DESCRIPTION"]
+HELP = [
+    ["CREATE ACCOUNT <name> <starting balance> <currency>", "New account"],
+    [
+        "CREATE BUDGET <name> <max budget> <currency> [description]",
+        "New budget, with an optional description",
+    ],
+    ["DELETE ACCOUNT <name>", "Soft delete an account"],
+    ["DELETE BUDGET <name>", "Soft delete a budget"],
+    ["LIST ACCOUNT [ALL]", "List accounts, ALL includes deleted ones"],
+    ["LIST BUDGET [ALL]", "List budgets, ALL includes deleted ones"],
+    [
+        "LIST TRANSACTION <account or budget>",
+        "List every transaction on an account or budget",
+    ],
+    ["ADD <account> <amount> <description>", "Add money to an account"],
+    ["SUB <account> <amount> <description>", "Take money from an account"],
+    [
+        "MV <source account> <dest account or budget> <amount> [description]",
+        "Transfer to an account or pay into a budget of the same currency",
+    ],
+    ["HELP", "Show this table"],
+    ["EXIT", "Leave the interpreter"],
+    ["", "Keywords are case-insensitive, quote names with spaces"],
+    ["", "Currencies: EUR, KWD"],
+]
 
 MV_USAGE = "MV <source account> <dest account or budget> <amount> [description]"
-LIST_USAGE = "LIST ACCOUNT|BUDGET [ALL]"
+LIST_USAGE = "LIST ACCOUNT|BUDGET [ALL] | LIST TRANSACTION <account or budget>"
 
 
 def split_instructions(text: str) -> list[str]:
@@ -71,7 +85,7 @@ def split_instructions(text: str) -> list[str]:
 
 
 def write_stdout(text: str) -> None:
-    """Write one line of output to stdout."""
+    """Write one table of output to stdout."""
     sys.stdout.write(text + "\n")
 
 
@@ -99,11 +113,15 @@ class Interpreter:
     """Runs el instructions against a journal."""
 
     def __init__(
-        self, journal: Journal, out: Callable[[str], None] = write_stdout
+        self,
+        journal: Journal,
+        out: Callable[[str], None] = write_stdout,
+        fmt: Formatter = format_table,
     ) -> None:
-        """Create an interpreter that writes its output through `out`."""
+        """Create an interpreter that formats with `fmt` and writes through `out`."""
         self.journal = journal
         self.out = out
+        self.fmt = fmt
 
     @property
     def ledger(self) -> Ledger:
@@ -125,12 +143,15 @@ class Interpreter:
             raise ElError(str(exc)) from None
         if not tokens:
             return True
+        if any("\n" in tok for tok in tokens):  # the log has one operation per line
+            raise ElError("names and descriptions cannot contain line breaks")
         verb, args = tokens[0].upper(), tokens[1:]
         if verb in ("EXIT", "QUIT"):
             return False
         handler = getattr(self, f"_cmd_{verb.lower()}", None)
         if handler is None:
             raise ElError(f"unknown command {tokens[0]!r} (try HELP)")
+        self.journal.refresh()  # see what other el processes saved meanwhile
         handler(args)
         return True
 
@@ -206,30 +227,33 @@ class Interpreter:
 
     def _cmd_create(self, args: list[str]) -> None:
         (op,) = self._commit("CREATE", args)
-        kind = "account" if isinstance(op, CreateAccount) else "budget"
-        self.out(f"created {kind}:{op.name}")
+        self._show(op.name, description=True)
 
     def _cmd_delete(self, args: list[str]) -> None:
         (op,) = self._commit("DELETE", args)
         kind = "account" if isinstance(op, DeleteAccount) else "budget"
-        self.out(f"deleted {kind}:{op.name}")
+        self._table(["ACTION", "KIND", "NAME"], [["deleted", kind, op.name]])
 
     def _cmd_add(self, args: list[str]) -> None:
         self._commit("ADD", args)
-        self._show_balance(args[0])
+        self._show(args[0])
 
     def _cmd_sub(self, args: list[str]) -> None:
         self._commit("SUB", args)
-        self._show_balance(args[0])
+        self._show(args[0])
 
     def _cmd_mv(self, args: list[str]) -> None:
         self._commit("MV", args)
-        self._show_balance(args[0])
-        self._show_balance(args[1])
+        self._show(args[1])
 
     def _cmd_list(self, args: list[str]) -> None:
         if not args or len(args) > 2:
             raise _usage(LIST_USAGE)
+        if args[0].upper() in ("TRANSACTION", "TRANSACTIONS"):
+            if len(args) != 2:
+                raise _usage(LIST_USAGE)
+            self._list_transactions(args[1])
+            return
         include_deleted = False
         if len(args) == 2:
             if args[1].upper() != "ALL":
@@ -241,20 +265,36 @@ class Interpreter:
             self._list_budgets(include_deleted)
 
     def _cmd_help(self, args: list[str]) -> None:
-        self.out(HELP)
+        self._table(HELP_HEADER, HELP)
 
     # ---- output ---------------------------------------------------------
 
-    def _show_balance(self, name: str) -> None:
+    def _show(self, name: str, description: bool = False) -> None:
+        """Print the current state of one account or budget as a table.
+
+        With `description`, a budget also shows its DESCRIPTION column.
+        """
         if self.ledger.kind_of(name) == "budget":
             b = self.ledger.budgets[name]
-            self.out(
-                f"budget:{b.name} {b.spent} of {b.max_amount} {b.currency}, "
-                f"{b.remaining}"
-            )
+            header = ["BUDGET", "MAX", "SPENT", "REMAINING", "CURRENCY"]
+            row = [
+                b.name,
+                str(b.max_amount),
+                str(b.spent),
+                str(b.remaining),
+                b.currency,
+            ]
+            if description:
+                header.append("DESCRIPTION")
+                row.append(b.description)
+            self._table(header, [row], right={1, 2, 3})
         else:
             a = self.ledger.accounts[name]
-            self.out(f"account:{a.name} {a.balance} {a.currency}")
+            self._table(
+                ["ACCOUNT", "BALANCE", "CURRENCY"],
+                [[a.name, str(a.balance), a.currency]],
+                right={1},
+            )
 
     def _list_accounts(self, include_deleted: bool) -> None:
         header = ["ACCOUNT", "BALANCE", "CURRENCY"]
@@ -268,7 +308,7 @@ class Interpreter:
             rows.append(row)
         if include_deleted:
             header.append("STATUS")
-        self._table(header, rows, right={1}, empty="no accounts")
+        self._table(header, rows, right={1})
 
     def _list_budgets(self, include_deleted: bool) -> None:
         header = ["BUDGET", "MAX", "SPENT", "REMAINING", "CURRENCY", "DESCRIPTION"]
@@ -289,23 +329,26 @@ class Interpreter:
             rows.append(row)
         if include_deleted:
             header.insert(5, "STATUS")
-        self._table(header, rows, right={1, 2, 3}, empty="no budgets")
+        self._table(header, rows, right={1, 2, 3})
+
+    def _list_transactions(self, name: str) -> None:
+        """Print every transaction on `name`, deleted items included."""
+        if self.ledger.kind_of(name) is None:
+            raise ElError(f"no account or budget named {name!r}")
+        rows = [
+            [stamp, operation, amount or "", currency or "", description or ""]
+            for stamp, operation, amount, currency, description in (
+                self.journal.transactions(name)
+            )
+        ]
+        self._table(
+            ["TIMESTAMP", "OPERATION", "AMOUNT", "CURRENCY", "DESCRIPTION"],
+            rows,
+            right={2},
+        )
 
     def _table(
-        self, header: list[str], rows: list[list[str]], right: set[int], empty: str
+        self, header: list[str], rows: list[list[str]], right: set[int] = frozenset()
     ) -> None:
-        if not rows:
-            self.out(empty)
-            return
-        widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
-
-        def fmt(row: list[str]) -> str:
-            cells = [
-                c.rjust(w) if i in right else c.ljust(w)
-                for i, (c, w) in enumerate(zip(row, widths, strict=True))
-            ]
-            return "  ".join(cells).rstrip()
-
-        self.out(fmt(header))
-        for row in rows:
-            self.out(fmt(row))
+        """Format one table with `fmt` and write it; all output goes here."""
+        self.out(self.fmt(header, rows, align_right=right))
