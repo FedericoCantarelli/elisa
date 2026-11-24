@@ -44,6 +44,17 @@ Keywords are case-insensitive. Quote names or descriptions that contain spaces
 See the [language reference](docs/reference.md) for every command's syntax,
 examples and output.
 
+All output is printed as ASCII tables, errors and warnings included:
+
+```
+el> LIST ACCOUNT
++----------+---------+----------+
+| ACCOUNT  | BALANCE | CURRENCY |
++----------+---------+----------+
+| checking | 1600.00 | EUR      |
++----------+---------+----------+
+```
+
 The supported currencies are `EUR` and `KWD`. An account only works with
 accounts and budgets in its own currency, so `MV` from an EUR account into a
 KWD budget (or the other way round) is refused. Amounts take at most two

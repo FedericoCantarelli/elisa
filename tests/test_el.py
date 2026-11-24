@@ -18,11 +18,21 @@ from elisa.interpreter import Interpreter
 from elisa.interpreter import split_instructions
 from elisa.ledger import ElError
 from elisa.storage import Journal
+from elisa.table import format_table
 from elisa.version import PYPROJECT
 from elisa.version import get_version
 
 
 STAMP = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2} ")
+
+
+def cells(table: str) -> list[list[str]]:
+    """Return the header and rows of an ASCII table as stripped cells."""
+    return [
+        [cell.strip() for cell in line[1:-1].split("|")]
+        for line in table.splitlines()
+        if line.startswith("|")
+    ]
 
 
 class ElTestCase(unittest.TestCase):
@@ -127,7 +137,10 @@ class TestCommands(ElTestCase):
     def test_create_and_list_account(self) -> None:
         """A new account shows in LIST ACCOUNT."""
         self.run_all("CREATE ACCOUNT checking 100 EUR", "LIST ACCOUNT")
-        self.assertEqual(self.output[-1].split(), ["checking", "100.00", "EUR"])
+        self.assertEqual(
+            cells(self.output[-1]),
+            [["ACCOUNT", "BALANCE", "CURRENCY"], ["checking", "100.00", "EUR"]],
+        )
 
     def test_mv_to_budget_records_expense(self) -> None:
         """MV into a budget raises its spending."""
@@ -160,25 +173,24 @@ class TestCommands(ElTestCase):
         )
         self.output.clear()
         self.interp.execute("LIST ACCOUNT")
-        self.assertFalse(any(line.startswith("a ") for line in self.output))
+        self.assertEqual([row[0] for row in cells(self.output[-1])], ["ACCOUNT", "b"])
         self.output.clear()
         self.interp.execute("LIST ACCOUNT ALL")
-        self.assertTrue(
-            any(line.startswith("a ") and "deleted" in line for line in self.output)
-        )
+        self.assertIn(["a", "1.00", "EUR", "deleted"], cells(self.output[-1]))
 
     def test_budget_soft_delete(self) -> None:
         """Deleted budgets show only with LIST BUDGET ALL."""
         self.run_all("CREATE BUDGET food 300 EUR", "DELETE BUDGET food")
         self.output.clear()
         self.interp.execute("LIST BUDGET")
-        self.assertEqual(self.output, ["no budgets"])
+        self.assertEqual(len(self.output), 1)
+        self.assertEqual(len(cells(self.output[0])), 1)  # header only
         self.output.clear()
         self.interp.execute("LIST BUDGET ALL")
-        self.assertIn("deleted", self.output[-1])
+        self.assertEqual(cells(self.output[-1])[-1][5], "deleted")
 
-    def test_output_prefixes_accounts_and_budgets(self) -> None:
-        """Replies name accounts as account:x and budgets as budget:x."""
+    def test_every_reply_is_a_table(self) -> None:
+        """Each command replies with one or more tables."""
         self.run_all(
             "CREATE ACCOUNT a 100 EUR",
             "CREATE BUDGET food 300 EUR",
@@ -186,18 +198,56 @@ class TestCommands(ElTestCase):
             "MV a food 25",
             "DELETE BUDGET food",
         )
+        account = ["ACCOUNT", "BALANCE", "CURRENCY"]
+        budget = ["BUDGET", "MAX", "SPENT", "REMAINING", "CURRENCY"]
         self.assertEqual(
-            self.output,
+            [cells(table) for table in self.output],
             [
-                "created account:a",
-                "created budget:food",
-                "account:a 90.00 EUR",
-                "account:a 65.00 EUR",
-                "budget:food 25.00 of 300.00 EUR, 275.00",
-                "deleted budget:food",
+                [account, ["a", "100.00", "EUR"]],
+                [
+                    [*budget, "DESCRIPTION"],
+                    ["food", "300.00", "0.00", "300.00", "EUR", ""],
+                ],
+                [account, ["a", "90.00", "EUR"]],
+                [budget, ["food", "300.00", "25.00", "275.00", "EUR"]],
+                [["ACTION", "KIND", "NAME"], ["deleted", "budget", "food"]],
             ],
         )
         self.assertEqual(self.log_ops()[-2], "ADD food 25.00 'MV a -> food'")
+
+    def test_mv_shows_only_destination(self) -> None:
+        """MV prints one table with the destination's new state."""
+        self.run_all("CREATE ACCOUNT a 100 EUR", "CREATE ACCOUNT b 0 EUR")
+        self.output.clear()
+        self.interp.execute("MV a b 40")
+        self.assertEqual(
+            self.output,
+            [
+                format_table(
+                    ["ACCOUNT", "BALANCE", "CURRENCY"],
+                    [["b", "40.00", "EUR"]],
+                    align_right={1},
+                )
+            ],
+        )
+
+    def test_create_budget_shows_budget(self) -> None:
+        """CREATE BUDGET replies with the new budget and its description."""
+        self.interp.execute("CREATE BUDGET food 300 EUR 'weekly groceries'")
+        self.assertEqual(
+            cells(self.output[-1]),
+            [
+                ["BUDGET", "MAX", "SPENT", "REMAINING", "CURRENCY", "DESCRIPTION"],
+                ["food", "300.00", "0.00", "300.00", "EUR", "weekly groceries"],
+            ],
+        )
+
+    def test_help_is_a_table(self) -> None:
+        """HELP lists the commands in a COMMAND, DESCRIPTION table."""
+        self.interp.execute("HELP")
+        rows = cells(self.output[-1])
+        self.assertEqual(rows[0], ["COMMAND", "DESCRIPTION"])
+        self.assertIn("LIST BUDGET [ALL]", [row[0] for row in rows])
 
     def test_keywords_case_insensitive(self) -> None:
         """Keywords and currency codes may be lower case."""
@@ -220,8 +270,7 @@ class TestCurrencies(ElTestCase):
             "MV dinar rent 30.50 june",
         )
         self.assertEqual(
-            self.output[-2:],
-            ["account:dinar 69.50 KWD", "budget:rent 30.50 of 80.00 KWD, 49.50"],
+            cells(self.output[-1])[1], ["rent", "80.00", "30.50", "49.50", "KWD"]
         )
         self.assertEqual(
             self.log_ops()[-2:],
@@ -277,14 +326,16 @@ class TestBudgetDescription(ElTestCase):
         )
         self.output.clear()
         self.interp.execute("LIST BUDGET")
-        self.assertEqual(self.output[0].split()[-1], "DESCRIPTION")
-        self.assertRegex(self.output[1], r"EUR +weekly groceries$")
-        self.assertTrue(self.output[2].endswith("EUR"))
+        header, food, fun = cells(self.output[0])
+        self.assertEqual(header[-1], "DESCRIPTION")
+        self.assertEqual(food[-2:], ["EUR", "weekly groceries"])
+        self.assertEqual(fun[-2:], ["EUR", ""])
         self.interp.execute("DELETE BUDGET food")
         self.output.clear()
         self.interp.execute("LIST BUDGET ALL")
-        self.assertEqual(self.output[0].split()[-2:], ["STATUS", "DESCRIPTION"])
-        self.assertRegex(self.output[1], r"deleted +weekly groceries$")
+        header, food, _ = cells(self.output[0])
+        self.assertEqual(header[-2:], ["STATUS", "DESCRIPTION"])
+        self.assertEqual(food[-2:], ["deleted", "weekly groceries"])
 
     def test_account_takes_no_description(self) -> None:
         """CREATE ACCOUNT still takes exactly four arguments."""
@@ -594,8 +645,18 @@ class TestDatabase(ElTestCase):
         """-c with an error leaves the database as it was."""
         self.interp.execute("CREATE ACCOUNT a 10 EUR")
         before = self.query("SELECT * FROM accounts")
-        self.assertEqual(self.run_cli("-c", "SUB a 3 snack; SUB nope 1 x;"), 1)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.run_cli("-c", "SUB a 3 snack; SUB nope 1 x;"), 1)
         self.assertEqual(self.query("SELECT * FROM accounts"), before)
+        self.assertEqual(
+            cells(err.getvalue()),
+            [
+                ["ERROR"],
+                ["instruction 2: no account named 'nope'"],
+                ["nothing was saved"],
+            ],
+        )
 
     def test_log_write_failure_rolls_back_everything(self) -> None:
         """If the log cannot be written, the database and memory stay as before."""
@@ -630,7 +691,50 @@ class TestVersion(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             code = main(["version"])
         self.assertEqual(code, 0)
-        self.assertEqual(out.getvalue(), f"el {get_version()}\n")
+        self.assertEqual(
+            out.getvalue(),
+            format_table(["PROGRAM", "VERSION"], [["el", get_version()]]) + "\n",
+        )
+
+
+class TestTable(unittest.TestCase):
+    """The ASCII table formatter behind all output."""
+
+    def test_layout(self) -> None:
+        """Columns are padded to the widest cell and framed with rules."""
+        self.assertEqual(
+            format_table(["NAME", "N"], [["a", "1.00"], ["long name", "10.00"]]),
+            "+-----------+-------+\n"
+            "| NAME      | N     |\n"
+            "+-----------+-------+\n"
+            "| a         | 1.00  |\n"
+            "| long name | 10.00 |\n"
+            "+-----------+-------+",
+        )
+
+    def test_align_right(self) -> None:
+        """Columns in align_right are right-aligned, but not their header."""
+        table = format_table(["N"], [["1.00"], ["10.00"]], align_right={0})
+        self.assertEqual(
+            table.splitlines()[1:5],
+            ["| N     |", "+-------+", "|  1.00 |", "| 10.00 |"],
+        )
+
+    def test_no_rows_shows_header(self) -> None:
+        """An empty table still has its header."""
+        self.assertEqual(format_table(["A"], []), "+---+\n| A |\n+---+")
+
+    def test_multiline_cell(self) -> None:
+        """A cell with newlines spans several lines of its row."""
+        self.assertEqual(
+            format_table(["A", "B"], [["x\ny", "z"]]).splitlines()[3:5],
+            ["| x | z |", "| y |   |"],
+        )
+
+    def test_row_length_must_match_header(self) -> None:
+        """A row with the wrong number of cells is a bug, not a user error."""
+        with self.assertRaises(ValueError):
+            format_table(["A", "B"], [["only one"]])
 
 
 if __name__ == "__main__":

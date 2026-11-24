@@ -8,17 +8,23 @@
 
 The SQLite database defaults to ~/.elisa/data.db (change it with --db) and the
 ledger log to ~/.elisa/ledger.log (change it with --log).
+
+Everything el writes, including errors and warnings on stderr, is an ASCII
+table made by `elisa.table.format_table`.
 """
 
 import argparse
 import contextlib
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import TextIO
 
 from elisa.interpreter import Interpreter
 from elisa.interpreter import split_instructions
 from elisa.ledger import ElError
 from elisa.storage import Journal
+from elisa.table import format_table
 from elisa.version import get_version
 
 
@@ -40,8 +46,17 @@ def db_path(cli_value: str | None) -> Path:
     return DEFAULT_DB
 
 
-def _err(text: str) -> None:
-    sys.stderr.write(f"error: {text}\n")
+def _write_table(
+    header: Sequence[str], rows: Sequence[Sequence[str]], stream: TextIO | None = None
+) -> None:
+    """Write a table to `stream` (stdout by default)."""
+    (stream or sys.stdout).write(format_table(header, rows) + "\n")
+
+
+def _err(*lines: str) -> None:
+    """Write an error table to stderr, one row per line of the message."""
+    rows = [[line] for text in lines for line in text.split("\n")]
+    _write_table(["ERROR"], rows, sys.stderr)
 
 
 def run_batch(interp: Interpreter, instructions: list[tuple[str, str]]) -> int:
@@ -65,7 +80,7 @@ def run_batch(interp: Interpreter, instructions: list[tuple[str, str]]) -> int:
                 except ElError as exc:
                     raise ElError(f"{where}: {exc}") from None
     except ElError as exc:
-        _err(f"{exc}\nnothing was saved")
+        _err(str(exc), "nothing was saved")
         return 1
     return 0
 
@@ -74,9 +89,13 @@ def repl(interp: Interpreter, args: argparse.Namespace) -> int:
     """Run the interactive interpreter until EXIT or end of input."""
     with contextlib.suppress(ImportError):
         import readline  # noqa: F401  (line editing and history)
-    sys.stdout.write(f"Ledger log: {log_path(args.log)}\n")
-    sys.stdout.write(f"Database:   {db_path(args.db)}\n")
-    sys.stdout.write("Type HELP for commands, EXIT or Ctrl-D to quit.\n")
+    _write_table(
+        ["SETTING", "VALUE"],
+        [
+            ["Ledger log", str(log_path(args.log))],
+            ["Database", str(db_path(args.db))],
+        ],
+    )
     while True:
         try:
             line = input("el> ")
@@ -127,19 +146,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.command and (args.c is not None or args.f is not None):
         parser.error(f"{args.command} cannot be combined with -c or -f")
     if args.command == "version":
-        sys.stdout.write(f"el {get_version()}\n")
+        _write_table(["PROGRAM", "VERSION"], [["el", get_version()]])
         return 0
 
     try:
         journal = Journal(log_path(args.log), db_path(args.db))
         if args.command == "rebuild":
             journal.rebuild()
-            sys.stdout.write(f"rebuilt {journal.db.path} from {journal.path}\n")
+            _write_table(
+                ["REBUILT", "FROM"], [[str(journal.db.path), str(journal.path)]]
+            )
             return 0
         if journal.log_changed:
-            sys.stderr.write(
-                f"warning: {journal.path} changed since el last wrote it;"
-                " run `el rebuild` to update the database from it\n"
+            _write_table(
+                ["WARNING"],
+                [
+                    [f"{journal.path} changed since el last wrote it"],
+                    ["run `el rebuild` to update the database from it"],
+                ],
+                sys.stderr,
             )
         interp = Interpreter(journal)
         if args.c is not None:
