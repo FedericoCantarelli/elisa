@@ -185,12 +185,20 @@ def main(argv: list[str] | None = None) -> int:
                 fmt, ["REBUILT", "FROM"], [[str(journal.db.path), str(journal.path)]]
             )
             return 0
+        if journal.recovered:
+            _notice(
+                fmt,
+                "warning",
+                f"an interrupted write was removed from the end of {journal.path}",
+                f"it was saved to {journal.recovered}",
+            )
         if journal.log_changed:
             _notice(
                 fmt,
                 "warning",
                 f"{journal.path} changed since el last wrote it",
-                "run `el rebuild` to update the database from it",
+                "run `el rebuild` to update the database from it;"
+                " until then el refuses to make changes",
             )
         interp = Interpreter(journal, fmt=fmt)
         if args.c is not None:

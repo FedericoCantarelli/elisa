@@ -274,6 +274,10 @@ instruction changes nothing and you can carry on. With `-c` or `-f` the whole
 batch is one transaction: one failure means nothing from that run is saved, and
 the message says which instruction or `file:line` failed.
 
+When the ledger log was changed outside of `el`, every instruction that would
+change something fails with `<log> changed since el last wrote it; run `el
+rebuild` before making changes` until you run `el rebuild`.
+
 ```
 $ el -c "SUB checking 1.234 x"
 +-------------------------------------------------------------------+

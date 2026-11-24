@@ -103,8 +103,10 @@ destination:
 
 The log holds everything needed to rebuild the database from scratch. `el`
 does that when the database is missing, and `el rebuild` does it on request.
-If the log was changed outside of `el`, for example edited by hand, `el` keeps
-using the database and prints a warning until you run `el rebuild`.
+If the log was changed outside of `el`, for example edited by hand, `el` prints
+a warning and refuses to make changes until you run `el rebuild`; reading
+(`LIST`, `HELP`) still works. A log whose last line has no newline at the end
+is never replayed, because that line may have been cut short.
 
 Inside the program every movement is an ADD with a signed amount; a negative
 ADD is written as SUB. On a budget, ADD increases the amount spent. Account
@@ -112,9 +114,20 @@ balances may go negative. Budget spending may go over the maximum but never
 below zero.
 
 Each change is written to both files together: the database transaction is
-committed only after the log line is written, and if either write fails
-neither file changes. With `-c` and `-f` the instructions run as one
-transaction: if any of them fails, nothing from that run is saved.
+committed only after the log lines are written and synced to disk, and if
+either write fails neither file changes (lines already appended are cut off
+again). With `-c` and `-f` the instructions run as one transaction: if any of
+them fails, nothing from that run is saved.
+
+Several `el` processes can use the same files at once, for example two
+terminals. Each write holds the database's write lock, reloads the current
+state, applies the change to it and saves, so one process never overwrites
+what another saved; each instruction also starts from the current state.
+
+If `el` is killed while it writes the log (a crash or power loss), the log can
+end with a line that was cut short. The next `el` moves that incomplete write
+to `ledger.log.interrupted`, next to the log, and prints a warning; the
+database never saw it, so nothing else needs fixing.
 
 ## Checks
 

@@ -143,12 +143,15 @@ class Interpreter:
             raise ElError(str(exc)) from None
         if not tokens:
             return True
+        if any("\n" in tok for tok in tokens):  # the log has one operation per line
+            raise ElError("names and descriptions cannot contain line breaks")
         verb, args = tokens[0].upper(), tokens[1:]
         if verb in ("EXIT", "QUIT"):
             return False
         handler = getattr(self, f"_cmd_{verb.lower()}", None)
         if handler is None:
             raise ElError(f"unknown command {tokens[0]!r} (try HELP)")
+        self.journal.refresh()  # see what other el processes saved meanwhile
         handler(args)
         return True
 
