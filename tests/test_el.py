@@ -15,10 +15,12 @@ from importlib import metadata
 from pathlib import Path
 from typing import ClassVar
 
+import elisa
+import elisa.cli
 import elisa.version
-from elisa import db_path
-from elisa import log_path
-from elisa import main
+from elisa.cli import db_path
+from elisa.cli import log_path
+from elisa.cli import main
 from elisa.interpreter import Interpreter
 from elisa.interpreter import split_instructions
 from elisa.ledger import Add
@@ -1271,11 +1273,11 @@ class TestMain(ElTestCase):
         )
 
     def test_module_entry_points(self) -> None:
-        """`python -m elisa` and running elisa/__init__.py both call main."""
+        """`python -m elisa` and running elisa/cli.py both call main."""
         argv = ["el", "--log", str(self.log), "--db", str(self.db), "version"]
         for run in (
             lambda: runpy.run_module("elisa", run_name="__main__"),
-            lambda: runpy.run_path(elisa.__file__, run_name="__main__"),
+            lambda: runpy.run_path(elisa.cli.__file__, run_name="__main__"),
         ):
             with (
                 self.subTest(run=run),

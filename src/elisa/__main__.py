@@ -2,7 +2,7 @@
 
 import sys
 
-from elisa import main
+from elisa.cli import main
 
 
 sys.exit(main())
