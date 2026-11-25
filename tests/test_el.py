@@ -13,6 +13,7 @@ import unittest.mock
 from decimal import Decimal
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 from typing import ClassVar
 
 import elisa
@@ -1069,7 +1070,7 @@ class TestLedger(unittest.TestCase):
     def test_unknown_operation_is_a_bug(self) -> None:
         """Anything that isn't an operation raises TypeError."""
         with self.assertRaises(TypeError):
-            Ledger().apply(object())  # type: ignore[arg-type]
+            Ledger().apply(object())  # ty: ignore[invalid-argument-type]
 
 
 class FailingConnection:
@@ -1084,7 +1085,7 @@ class FailingConnection:
         """Delegate everything else to the real connection."""
         return getattr(self.conn, name)
 
-    def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+    def execute(self, sql: str, *args: Any) -> sqlite3.Cursor:
         """Fail on the chosen statement."""
         if sql == self.fail_on:
             raise sqlite3.OperationalError("database is locked")
@@ -1225,7 +1226,11 @@ class TestStorageFailures(ElTestCase):
     def test_unknown_operation_row_is_a_bug(self) -> None:
         """Only the five operations can be stored."""
         with self.assertRaises(TypeError):
-            _transaction_row(Ledger(), "2026-01-01 10:00", object())  # type: ignore[arg-type]
+            _transaction_row(
+                Ledger(),
+                "2026-01-01 10:00",
+                object(),  # ty: ignore[invalid-argument-type]
+            )
 
 
 class TestMain(ElTestCase):
