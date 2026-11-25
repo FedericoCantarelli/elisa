@@ -1,21 +1,37 @@
 [project]
 name = "elisa"
-version = "0.3.0"
-description = "A simple CLI to manage expenses."
+version = "0.3.1"
+description = "Track bank accounts, budgets and expenses, from the el CLI or as a Python library."
 readme = "README.md"
 authors = [
     { name = "FedericoCantarelli", email = "fede.cantarelli98@gmail.com" }
 ]
 requires-python = ">=3.13"
+keywords = ["budget", "expenses", "finance", "ledger", "cli"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Accounting",
+    "Typing :: Typed",
+]
 dependencies = []
 
+[project.urls]
+Repository = "https://github.com/FedericoCantarelli/elisa"
+Changelog = "https://github.com/FedericoCantarelli/elisa/blob/main/CHANGELOG.md"
+
 [project.scripts]
-elisa = "elisa:main"
-el = "elisa:main"
+elisa = "elisa.cli:main"
+el = "elisa.cli:main"
 
 [dependency-groups]
 dev = [
     "ruff==0.16",
+    "ty>=0.0.110",
 ]
 
 [build-system]

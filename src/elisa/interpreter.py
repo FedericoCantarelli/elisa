@@ -12,6 +12,7 @@ A negative `Add` is written to the log as SUB, see `elisa.ledger`.
 import shlex
 import sys
 from collections.abc import Callable
+from collections.abc import Collection
 from decimal import Decimal
 
 from elisa.ledger import Add
@@ -226,13 +227,13 @@ class Interpreter:
     # ---- commands -------------------------------------------------------
 
     def _cmd_create(self, args: list[str]) -> None:
-        (op,) = self._commit("CREATE", args)
-        self._show(op.name, description=True)
+        self._commit("CREATE", args)
+        self._show(args[1], description=True)
 
     def _cmd_delete(self, args: list[str]) -> None:
         (op,) = self._commit("DELETE", args)
         kind = "account" if isinstance(op, DeleteAccount) else "budget"
-        self._table(["ACTION", "KIND", "NAME"], [["deleted", kind, op.name]])
+        self._table(["ACTION", "KIND", "NAME"], [["deleted", kind, args[1]]])
 
     def _cmd_add(self, args: list[str]) -> None:
         self._commit("ADD", args)
@@ -348,7 +349,10 @@ class Interpreter:
         )
 
     def _table(
-        self, header: list[str], rows: list[list[str]], right: set[int] = frozenset()
+        self,
+        header: list[str],
+        rows: list[list[str]],
+        right: Collection[int] = (),
     ) -> None:
         """Format one table with `fmt` and write it; all output goes here."""
         self.out(self.fmt(header, rows, align_right=right))

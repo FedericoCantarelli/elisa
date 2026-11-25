@@ -4,10 +4,58 @@
 
 ## Install
 
+`el` is a standard Python package (stdlib only, Python 3.13+). Install the CLI
+as a standalone tool, isolated from other environments:
+
 ```sh
-uv sync            # or: uv tool install -e .
-uv run el          # or: uv run python -m elisa
+uv tool install git+https://github.com/FedericoCantarelli/elisa   # or: pipx install git+...
+uv tool install dist/elisa-<version>-py3-none-any.whl             # a wheel from a GitHub release
+uv tool install -e .                                              # from a checkout, editable
 ```
+
+This puts `el` (and its alias `elisa`) on your `PATH`. To use it as a library
+instead, add it to a project's dependencies:
+
+```sh
+uv add git+https://github.com/FedericoCantarelli/elisa   # or: pip install git+...
+```
+
+From a checkout, `uv sync` installs it into `.venv`; run it with `uv run el`
+or `uv run python -m elisa`.
+
+## Library
+
+`import elisa` exposes the same engine the CLI uses, without starting the CLI:
+
+```python
+import json
+from pathlib import Path
+
+from elisa import ElError, Interpreter, Journal, format_json
+
+journal = Journal(Path("ledger.log"), Path("data.db"))
+results: list[str] = []
+el = Interpreter(journal, out=results.append, fmt=format_json)
+
+el.execute("CREATE ACCOUNT checking 1500 EUR")
+el.execute("LIST ACCOUNT")
+accounts = json.loads(results[-1])  # [{"account": "checking", ...}]
+
+try:
+    el.execute("SUB nowhere 10 lunch")
+except ElError as exc:
+    error = str(exc)  # "no account named 'nowhere'"
+
+with journal.transaction():  # all-or-nothing, like `el -c`
+    el.execute("CREATE ACCOUNT savings 0 EUR")
+    el.execute("MV checking savings 100")
+```
+
+Each `execute` call passes one formatted table to `out` (`format_table` for
+ASCII, `format_json` for JSON). For direct access, `journal.ledger` holds the
+current `Account` and `Budget` objects, and `journal.commit([...])` writes
+operations such as `Add`. The public names are listed in `elisa.__all__`, and
+the package ships type hints (`py.typed`).
 
 ## Usage
 

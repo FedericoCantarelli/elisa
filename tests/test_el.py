@@ -13,12 +13,15 @@ import unittest.mock
 from decimal import Decimal
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 from typing import ClassVar
 
+import elisa
+import elisa.cli
 import elisa.version
-from elisa import db_path
-from elisa import log_path
-from elisa import main
+from elisa.cli import db_path
+from elisa.cli import log_path
+from elisa.cli import main
 from elisa.interpreter import Interpreter
 from elisa.interpreter import split_instructions
 from elisa.ledger import Add
@@ -1067,7 +1070,7 @@ class TestLedger(unittest.TestCase):
     def test_unknown_operation_is_a_bug(self) -> None:
         """Anything that isn't an operation raises TypeError."""
         with self.assertRaises(TypeError):
-            Ledger().apply(object())  # type: ignore[arg-type]
+            Ledger().apply(object())  # ty: ignore[invalid-argument-type]
 
 
 class FailingConnection:
@@ -1082,7 +1085,7 @@ class FailingConnection:
         """Delegate everything else to the real connection."""
         return getattr(self.conn, name)
 
-    def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+    def execute(self, sql: str, *args: Any) -> sqlite3.Cursor:
         """Fail on the chosen statement."""
         if sql == self.fail_on:
             raise sqlite3.OperationalError("database is locked")
@@ -1223,7 +1226,11 @@ class TestStorageFailures(ElTestCase):
     def test_unknown_operation_row_is_a_bug(self) -> None:
         """Only the five operations can be stored."""
         with self.assertRaises(TypeError):
-            _transaction_row(Ledger(), "2026-01-01 10:00", object())  # type: ignore[arg-type]
+            _transaction_row(
+                Ledger(),
+                "2026-01-01 10:00",
+                object(),  # ty: ignore[invalid-argument-type]
+            )
 
 
 class TestMain(ElTestCase):
@@ -1271,11 +1278,11 @@ class TestMain(ElTestCase):
         )
 
     def test_module_entry_points(self) -> None:
-        """`python -m elisa` and running elisa/__init__.py both call main."""
+        """`python -m elisa` and running elisa/cli.py both call main."""
         argv = ["el", "--log", str(self.log), "--db", str(self.db), "version"]
         for run in (
             lambda: runpy.run_module("elisa", run_name="__main__"),
-            lambda: runpy.run_path(elisa.__file__, run_name="__main__"),
+            lambda: runpy.run_path(elisa.cli.__file__, run_name="__main__"),
         ):
             with (
                 self.subTest(run=run),
