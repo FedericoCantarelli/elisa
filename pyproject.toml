@@ -1,6 +1,6 @@
 [project]
 name = "elisa"
-version = "0.3.0"
+version = "0.3.1"
 description = "Track bank accounts, budgets and expenses, from the el CLI or as a Python library."
 readme = "README.md"
 authors = [

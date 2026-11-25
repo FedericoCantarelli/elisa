@@ -1,3 +1,13 @@
+## 0.3.1 (2026-11-25)
+
+### Fix
+
+- resolve ty type-check errors in interpreter and tests
+
+### Refactor
+
+- split the CLI into elisa.cli and expose a public library API
+
 ## 0.3.0 (2026-11-24)
 
 ### BREAKING CHANGE
