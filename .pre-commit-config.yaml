@@ -11,3 +11,14 @@ repos:
   - id: ruff-format
   repo: https://github.com/astral-sh/ruff-pre-commit
   rev: v0.16.9
+- hooks:
+  - id: ty
+    name: ty check
+    entry: uv run --frozen ty check
+    language: system
+    types_or:
+    - python
+    - pyi
+    pass_filenames: false
+    require_serial: true
+  repo: local

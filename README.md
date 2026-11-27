@@ -1,27 +1,24 @@
-# elisa
+# Elisa
 
-`el` is a small command-line tool for tracking bank accounts, budgets and expenses.
+A small CLI for tracking bank accounts, budgets and expenses. The main goal of Elisa is to give the user a tool that can be used both as CLI and as Python package, in order to let them decide how to use it.
 
 ## Install
-
-`el` is a standard Python package (stdlib only, Python 3.13+). Install the CLI
-as a standalone tool, isolated from other environments:
-
+To install as a standalone CLI use the following commands (this also add `el` and `elisa` to your `PATH`)
 ```sh
 uv tool install git+https://github.com/FedericoCantarelli/elisa   # or: pipx install git+...
-uv tool install dist/elisa-<version>-py3-none-any.whl             # a wheel from a GitHub release
-uv tool install -e .                                              # from a checkout, editable
 ```
-
-This puts `el` (and its alias `elisa`) on your `PATH`. To use it as a library
-instead, add it to a project's dependencies:
-
+To use it as a library instead, add it to a project's dependencies:
 ```sh
 uv add git+https://github.com/FedericoCantarelli/elisa   # or: pip install git+...
 ```
+### Development
+To run it as an editable tool you can follow these commands:
 
-From a checkout, `uv sync` installs it into `.venv`; run it with `uv run el`
-or `uv run python -m elisa`.
+```sh
+git clone https://github.com/FedericoCantarelli/elisa
+cd elisa
+uv tool install -e .
+```
 
 ## Library
 
@@ -52,10 +49,11 @@ with journal.transaction():  # all-or-nothing, like `el -c`
 ```
 
 Each `execute` call passes one formatted table to `out` (`format_table` for
-ASCII, `format_json` for JSON). For direct access, `journal.ledger` holds the
+ASCII, `format_json` for JSON). 
+
+For direct access, `journal.ledger` holds the
 current `Account` and `Budget` objects, and `journal.commit([...])` writes
-operations such as `Add`. The public names are listed in `elisa.__all__`, and
-the package ships type hints (`py.typed`).
+operations such as `Add`.
 
 ## Usage
 
@@ -156,15 +154,12 @@ a warning and refuses to make changes until you run `el rebuild`; reading
 (`LIST`, `HELP`) still works. A log whose last line has no newline at the end
 is never replayed, because that line may have been cut short.
 
-Inside the program every movement is an ADD with a signed amount; a negative
-ADD is written as SUB. On a budget, ADD increases the amount spent. Account
-balances may go negative. Budget spending may go over the maximum but never
-below zero.
-
 Each change is written to both files together: the database transaction is
 committed only after the log lines are written and synced to disk, and if
 either write fails neither file changes (lines already appended are cut off
-again). With `-c` and `-f` the instructions run as one transaction: if any of
+again). 
+
+With `-c` and `-f` the instructions run as one transaction: if any of
 them fails, nothing from that run is saved.
 
 Several `el` processes can use the same files at once, for example two
