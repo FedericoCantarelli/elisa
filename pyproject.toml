@@ -1,5 +1,5 @@
 [project]
-name = "elisa"
+name = "elisa-budget"
 version = "0.3.1"
 description = "Track bank accounts, budgets and expenses, from the el CLI or as a Python library."
 readme = "README.md"
@@ -7,7 +7,6 @@ authors = [
     { name = "FedericoCantarelli", email = "fede.cantarelli98@gmail.com" }
 ]
 requires-python = ">=3.13"
-keywords = ["budget", "expenses", "finance", "ledger", "cli"]
 classifiers = [
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",

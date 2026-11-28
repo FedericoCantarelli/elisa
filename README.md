@@ -5,11 +5,11 @@ A small CLI for tracking bank accounts, budgets and expenses. The main goal of E
 ## Install
 To install as a standalone CLI use the following commands (this also add `el` and `elisa` to your `PATH`)
 ```sh
-uv tool install git+https://github.com/FedericoCantarelli/elisa   # or: pipx install git+...
+uv tool install git+https://github.com/FedericoCantarelli/elisa@<tag>   # or: pipx install git+...
 ```
 To use it as a library instead, add it to a project's dependencies:
 ```sh
-uv add git+https://github.com/FedericoCantarelli/elisa   # or: pip install git+...
+uv add git+https://github.com/FedericoCantarelli/elisa@<tag>   # or: pip install git+...
 ```
 ### Development
 To run it as an editable tool you can follow these commands:
